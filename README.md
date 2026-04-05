@@ -349,8 +349,9 @@ Zero bloat. Everything else is standard library.
 
 ## Author
 
-Built by **[inSudo](https://github.com/inSudo)** — security researcher & bug bounty hunter.  
-Assisted by Claude AI (Anthropic).
+Built by **[inSudo](https://github.com/inSudo)** — security researcher & bug bounty hunter.
+
+> Assisted by [Claude AI](https://claude.ai) (Anthropic).
 ---
 
 ## Disclaimer
