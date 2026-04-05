@@ -94,7 +94,7 @@ Concurrent fanout to all sources simultaneously. Per-source 30-second timeout â€
 ## Install
 
 ```bash
-git clone https://github.com/inSudo/ghostsub
+git clone https://github.com/inSudo/ghostsub.git
 cd ghostsub
 go mod tidy
 go build -o ghostsub ./cmd/ghostsub
