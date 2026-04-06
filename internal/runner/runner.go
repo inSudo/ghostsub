@@ -143,29 +143,57 @@ func (r *Runner) Run(ctx context.Context, domain string) error {
 
 	// ── 4c: Drain + write passive/brute results ───────────────────────────────
 	collected := []string{}
+	// We resolve each sub here to get IPs for hijack filtering.
+	// Use a semaphore to avoid too many concurrent resolves during drain.
+	drainSem := make(chan struct{}, 50)
+	var drainWg sync.WaitGroup
+	var drainMu sync.Mutex
+
 	for sub := range allSubs {
 		sub = strings.ToLower(strings.TrimSpace(sub))
 		if sub == "" {
 			continue
 		}
-		// Validate: must end with .domain
 		if !strings.HasSuffix(sub, "."+domain) && sub != domain {
 			continue
 		}
 
-		// Filter hijack IPs
-		if isHijacked(sub, hijackIPs) {
-			continue
-		}
+		drainSem <- struct{}{}
+		drainWg.Add(1)
 
-		// Write (dedup handled in writer)
-		if r.writer.Write(sub, "passive/brute", nil) {
-			collected = append(collected, sub)
-		}
+		go func(s string) {
+			defer drainWg.Done()
+			defer func() { <-drainSem }()
+
+			// Resolve to get IPs — needed for hijack check + writer metadata
+			resolveResult, err := r.res.Resolve(ctx, s)
+			var ips []string
+			if err == nil && resolveResult != nil {
+				ips = resolveResult.IPs
+			}
+
+			// Filter: if all IPs are hijack IPs, skip
+			if isHijacked(ips, hijackIPs) {
+				return
+			}
+
+			drainMu.Lock()
+			defer drainMu.Unlock()
+			if r.writer.Write(s, "passive/brute", ips) {
+				collected = append(collected, s)
+			}
+		}(sub)
 	}
+	drainWg.Wait()
 
 	if !r.cfg.Silent {
 		fmt.Printf("\n[passive/brute] found %d unique subdomains\n", len(collected))
+	}
+
+	// ── Step 4d: Multi-level wildcard detection ───────────────────────────────
+	// Now that we have collected subs, detect wildcards at sub-levels too
+	if !r.cfg.NoWildcardFilter && len(collected) > 0 {
+		wc.DetectMultiLevel(ctx, collected)
 	}
 
 	// ── Step 5: Permutation ───────────────────────────────────────────────────
@@ -198,11 +226,17 @@ func (r *Runner) Run(ctx context.Context, domain string) error {
 				defer func() { <-sem }()
 
 				res, err := r.res.Resolve(ctx, p)
-				if err != nil || len(res.IPs) == 0 {
+				if err != nil || res == nil || len(res.IPs) == 0 {
 					return
 				}
 
+				// Wildcard filter
 				if wc != nil && !r.cfg.NoWildcardFilter && wc.IsWildcard(res.IPs) {
+					return
+				}
+
+				// Hijack filter
+				if isHijacked(res.IPs, hijackIPs) {
 					return
 				}
 
@@ -308,8 +342,17 @@ func (r *Runner) RunMulti(ctx context.Context, domains []string) error {
 	return nil
 }
 
-func isHijacked(sub string, hijackIPs map[string]struct{}) bool {
-	// We'd need to resolve to check, but since we filter at resolver level this is a backup
-	// For now, just return false — resolver already handles this
-	return false
+// isHijacked resolves the subdomain and checks if ALL its IPs are known hijack IPs.
+// Returns true only if resolved IPs are a subset of ISP hijack IPs (false positive).
+func isHijacked(ips []string, hijackIPs map[string]struct{}) bool {
+	if len(hijackIPs) == 0 || len(ips) == 0 {
+		return false
+	}
+	// If every IP resolved is a known hijack IP → this result is fake
+	for _, ip := range ips {
+		if _, ok := hijackIPs[ip]; !ok {
+			return false // at least one real IP → not hijacked
+		}
+	}
+	return true
 }

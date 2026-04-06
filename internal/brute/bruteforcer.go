@@ -33,124 +33,132 @@ type Stats struct {
 
 // Bruteforcer performs concurrent DNS brute-force with smart features.
 type Bruteforcer struct {
-	res     *resolver.Resolver
-	wc      *resolver.WildcardDetector
-	threads int
-	verbose bool
-	Stats   *Stats
-	mu      sync.Mutex
+	res            *resolver.Resolver
+	wc             *resolver.WildcardDetector
+	threads        int
+	verbose        bool
+	Stats          *Stats
+	currentThreads atomic.Int64
 }
 
 // New creates a Bruteforcer.
 func New(res *resolver.Resolver, wc *resolver.WildcardDetector, threads int, verbose bool) *Bruteforcer {
-	return &Bruteforcer{
+	b := &Bruteforcer{
 		res:     res,
 		wc:      wc,
 		threads: threads,
 		verbose: verbose,
 		Stats:   &Stats{},
 	}
+	b.currentThreads.Store(int64(threads))
+	return b
 }
 
 // Run streams resolved subdomains for the given domain.
-// wordlistCh should be a streaming channel from LoadWordlist().
-// If resumeFile is set, already-done words are skipped.
 func (b *Bruteforcer) Run(ctx context.Context, domain string, wordlistCh <-chan string, resumeFile string) <-chan string {
 	out := make(chan string, 500)
 
 	go func() {
 		defer close(out)
 
-		// Load checkpoint if resuming
-		checkpoint, doneSet := b.loadCheckpoint(resumeFile, domain)
-		_ = checkpoint
+		_, doneSet := b.loadCheckpoint(resumeFile, domain)
+
+		throttleTicker := time.NewTicker(10 * time.Second)
+		defer throttleTicker.Stop()
 
 		sem := make(chan struct{}, b.threads)
 		var wg sync.WaitGroup
 
-		// Adaptive throttle ticker
-		throttleTicker := time.NewTicker(10 * time.Second)
-		defer throttleTicker.Stop()
-
-		currentThreads := b.threads
-
-		for {
-			select {
-			case <-ctx.Done():
-				wg.Wait()
-				return
-			case <-throttleTicker.C:
-				// Check error rate — reduce threads if degraded network
-				tried := b.Stats.Tried.Load()
-				errs := b.Stats.Errors.Load()
-				if tried > 100 {
+		// Adaptive throttle goroutine — uses atomic to avoid data race
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-throttleTicker.C:
+					tried := b.Stats.Tried.Load()
+					errs := b.Stats.Errors.Load()
+					if tried < 200 {
+						continue
+					}
 					rate := float64(errs) / float64(tried)
-					if rate > 0.30 && currentThreads > 20 {
-						currentThreads = currentThreads / 2
+					cur := b.currentThreads.Load()
+					if rate > 0.35 && cur > 20 {
+						newT := cur / 2
+						b.currentThreads.Store(newT)
 						if b.verbose {
-							fmt.Printf("\r[brute] high error rate (%.0f%%), reducing threads to %d\n",
-								rate*100, currentThreads)
+							fmt.Printf("\r[brute] high error rate (%.0f%%), threads→%d\n", rate*100, newT)
 						}
-					} else if rate < 0.05 && currentThreads < b.threads {
-						currentThreads = min(currentThreads+10, b.threads)
+					} else if rate < 0.05 && cur < int64(b.threads) {
+						newT := cur + 20
+						if newT > int64(b.threads) {
+							newT = int64(b.threads)
+						}
+						b.currentThreads.Store(newT)
+						if b.verbose {
+							fmt.Printf("\r[brute] network stable, threads→%d\n", newT)
+						}
 					}
 				}
-			case word, ok := <-wordlistCh:
-				if !ok {
+			}
+		}()
+
+		for word := range wordlistCh {
+			if ctx.Err() != nil {
+				break
+			}
+			if doneSet[word] {
+				continue
+			}
+
+			// Drain excess slots if threads were reduced
+			cur := int(b.currentThreads.Load())
+			for len(sem) >= cur && cur > 0 {
+				select {
+				case <-ctx.Done():
 					wg.Wait()
+					return
+				case <-time.After(5 * time.Millisecond):
+					cur = int(b.currentThreads.Load())
+				}
+			}
+
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				break
+			}
+
+			wg.Add(1)
+			go func(w string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				host := w + "." + domain
+				b.Stats.Tried.Add(1)
+
+				res, err := b.res.Resolve(ctx, host)
+				if err != nil {
+					b.Stats.Errors.Add(1)
+					return
+				}
+				if res == nil || len(res.IPs) == 0 {
+					return
+				}
+				if b.wc != nil && b.wc.IsWildcard(res.IPs) {
+					b.Stats.Filtered.Add(1)
 					return
 				}
 
-				// Skip if already done (resume mode)
-				if doneSet[word] {
-					continue
+				b.Stats.Found.Add(1)
+				select {
+				case out <- host:
+				case <-ctx.Done():
 				}
-
-				// Throttle to currentThreads
-				for len(sem) >= currentThreads {
-					select {
-					case <-ctx.Done():
-						wg.Wait()
-						return
-					case <-time.After(10 * time.Millisecond):
-					}
-				}
-
-				sem <- struct{}{}
-				wg.Add(1)
-
-				go func(w string) {
-					defer wg.Done()
-					defer func() { <-sem }()
-
-					host := w + "." + domain
-					b.Stats.Tried.Add(1)
-
-					res, err := b.res.Resolve(ctx, host)
-					if err != nil {
-						b.Stats.Errors.Add(1)
-						return
-					}
-
-					if len(res.IPs) == 0 {
-						return
-					}
-
-					// Wildcard filter
-					if b.wc != nil && b.wc.IsWildcard(res.IPs) {
-						b.Stats.Filtered.Add(1)
-						return
-					}
-
-					b.Stats.Found.Add(1)
-
-					select {
-					case out <- host:
-					case <-ctx.Done():
-					}
-				}(word)
-			}
+			}(word)
 		}
+
+		wg.Wait()
 	}()
 
 	return out
@@ -274,9 +282,4 @@ func SaveResults(path string, subs []string) error {
 	return w.Flush()
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+

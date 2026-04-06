@@ -94,7 +94,7 @@ Concurrent fanout to all sources simultaneously. Per-source 30-second timeout â€
 ## Install
 
 ```bash
-git clone https://github.com/inSudo/ghostsub.git
+git clone https://github.com/inSudo/ghostsub
 cd ghostsub
 go mod tidy
 go build -o ghostsub ./cmd/ghostsub
@@ -351,7 +351,6 @@ Zero bloat. Everything else is standard library.
 
 Built by **[inSudo](https://github.com/inSudo)** â€” security researcher & bug bounty hunter.
 
-> Assisted by [Claude AI](https://claude.ai) (Anthropic).
 ---
 
 ## Disclaimer

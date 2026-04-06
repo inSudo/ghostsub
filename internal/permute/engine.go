@@ -41,21 +41,34 @@ var defaultWords = []string{
 }
 
 // patterns defines how permutations are generated.
-// Variables: {sub}, {word}, {num}, {sep}
 var patterns = []string{
+	// Dash-separated
 	"{word}-{sub}",
 	"{sub}-{word}",
+	"{word}-{sub}-{num}",
+	"{sub}-{word}-{num}",
+	"{num}-{sub}",
+	"{sub}-{num}",
+	"{word}-{num}",
+	// Dot-separated
 	"{word}.{sub}",
 	"{sub}.{word}",
+	"{num}.{sub}",
+	// No separator
 	"{word}{sub}",
 	"{sub}{word}",
 	"{sub}{num}",
 	"{word}{num}",
-	"{word}-{sub}-{num}",
-	"{sub}-{word}-{num}",
 	"{word}{num}-{sub}",
-	"{num}-{sub}",
-	"{num}.{sub}",
+	// Multi-word
+	"{word}-{sub}-{word}",
+	"{sub}-{word}-{sub}",
+	// Version-style
+	"v{num}-{sub}",
+	"{sub}-v{num}",
+	// Environment prefix/suffix
+	"{word}{sub}-{num}",
+	"{num}{sub}",
 }
 
 // Engine generates subdomain permutations.
@@ -103,11 +116,10 @@ func (e *Engine) Generate(subdomains []string, domain string) <-chan string {
 			}
 
 			parts := parseParts(subdomain)
-			nums := extractNumbers(subdomain)
 
 			for _, word := range allWords {
 				for _, pattern := range patterns {
-					candidates := applyPattern(pattern, parts, word, nums, domain)
+					candidates := applyPattern(pattern, parts, word, domain)
 					for _, c := range candidates {
 						if _, ok := seen[c]; ok {
 							continue
@@ -132,7 +144,7 @@ func (e *Engine) Generate(subdomains []string, domain string) <-chan string {
 	return out
 }
 
-func applyPattern(pattern string, parts []string, word string, nums []string, domain string) []string {
+func applyPattern(pattern string, parts []string, word string, domain string) []string {
 	var results []string
 
 	sub := strings.Join(parts, "-")
@@ -174,11 +186,6 @@ func parseParts(subdomain string) []string {
 		}
 	}
 	return cleaned
-}
-
-func extractNumbers(s string) []string {
-	re := regexp.MustCompile(`\d+`)
-	return re.FindAllString(s, -1)
 }
 
 // iterateNumbers generates ±5 variants of numbered subdomains.
