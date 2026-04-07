@@ -16,14 +16,15 @@ import (
 )
 
 const banner = `
-  ██████╗ ██╗  ██╗ ██████╗ ███████╗████████╗███████╗██╗   ██╗██████╗
- ██╔════╝ ██║  ██║██╔═══██╗██╔════╝╚══██╔══╝██╔════╝██║   ██║██╔══██╗
- ██║  ███╗███████║██║   ██║███████╗   ██║   ███████╗██║   ██║██████╔╝
- ██║   ██║██╔══██║██║   ██║╚════██║   ██║   ╚════██║██║   ██║██╔══██╗
- ╚██████╔╝██║  ██║╚██████╔╝███████║   ██║   ███████║╚██████╔╝██████╔╝
-  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   ╚══════╝ ╚═════╝ ╚═════╝
-                        subdomain enumeration tool
-                 passive | brute | permute — by ghostsub
+ _       __     __           __
+| |     / /__  / /___  _____/ /____  _  __
+| | /| / / _ \/ / __ \/ ___/ __/ _ \| |/_/
+| |/ |/ /  __/ / /_/ / /__/ /_/  __/>  <
+|__/|__/\___/_/\____/\___/\__/\___/_/|_|
+
+subdomain enumeration tool
+passive | brute | permute
+by inSudo
 `
 
 var (
@@ -119,12 +120,19 @@ func run(cmd *cobra.Command, args []string) error {
 
 	if flagSources != "" {
 		for _, s := range strings.Split(flagSources, ",") {
-			cfg.Sources = append(cfg.Sources, strings.TrimSpace(s))
+			s = strings.TrimSpace(s)
+			if s != "" {
+				cfg.Sources = append(cfg.Sources, s)
+			}
 		}
 	}
+
 	if flagExcludeSources != "" {
 		for _, s := range strings.Split(flagExcludeSources, ",") {
-			cfg.ExcludeSources = append(cfg.ExcludeSources, strings.TrimSpace(s))
+			s = strings.TrimSpace(s)
+			if s != "" {
+				cfg.ExcludeSources = append(cfg.ExcludeSources, s)
+			}
 		}
 	}
 
@@ -141,8 +149,9 @@ func run(cmd *cobra.Command, args []string) error {
 	// Collect domains
 	var domains []string
 	if flagDomain != "" {
-		domains = append(domains, flagDomain)
+		domains = append(domains, strings.ToLower(strings.TrimSpace(flagDomain)))
 	}
+
 	if flagDomainList != "" {
 		listed, err := readDomainList(flagDomainList)
 		if err != nil {
@@ -205,7 +214,10 @@ func readDomainList(path string) ([]string, error) {
 		}
 		domains = append(domains, line)
 	}
-	return domains, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return domains, nil
 }
 
 func dedupStrings(ss []string) []string {
