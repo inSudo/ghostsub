@@ -24,7 +24,7 @@ const banner = `
 
 subdomain enumeration tool
 passive | brute | permute
-by inSudo
+by inSudo X Claude
 `
 
 var (
